@@ -107,7 +107,7 @@ def detector(path):
 
         imgGray = cv2.cvtColor(imgOriginal, cv2.COLOR_BGR2GRAY)
         imgSalida = cv2.equalizeHist(imgGray)  # Aumenta contraste
-        imgSalida = cv2.blur(imgSalida, (1, 1))  # Elimina ruido
+        imgSalida = cv2.blur(imgSalida, (3, 3))  # Elimina ruido
 
         mser = cv2.MSER_create(delta=3, min_area=250, max_area=20000, max_variation=0.1, min_diversity=25)
         regiones, boundingBoxes = mser.detectRegions(imgSalida)
@@ -122,8 +122,10 @@ def detector(path):
             separacion_y = yAnt / y
 
             if not (separacion_x > 0.8 and separacion_x < 1.2 and separacion_y > 0.8 and separacion_y < 1.2):
-                if (proporcion <= 1.2 and proporcion >= 0.8):  # Eliminar regiones con proporcion distinta de 1.0 -> se queda con cuadrados practicamente
-                    if (x >= 10 and y >= 10 and x + w + 20 <= imgOriginal.shape[0] and y + h + 20 <= imgOriginal.shape[1]):  # Mirar desbordamiento imagen para ampliar
+                if (
+                        proporcion <= 1.2 and proporcion >= 0.8):  # Eliminar regiones con proporcion distinta de 1.0 -> se queda con cuadrados practicamente
+                    if (x >= 10 and y >= 10 and x + w + 20 <= imgOriginal.shape[0] and y + h + 20 <= imgOriginal.shape[
+                        1]):  # Mirar desbordamiento imagen para ampliar
                         x -= 10
                         y -= 10
                         w += 20
@@ -131,25 +133,38 @@ def detector(path):
                         numDeteccion += 1
                         imgResultado = imgOriginal[y:y + h, x:x + w]
 
-                        mascaraAzul = HSV(imgResultado, 2)
-                        mascaraRojo = HSV(imgResultado, 1)
-                        porcentaje, tipo = comparacion(mascaraRojo)
+                        porcentaje, tipo = comparacion(imgResultado)
 
                         if (porcentaje >= 0.2):
                             nombre = img[0:5] + "_" + str(numDeteccion) + img[5:]
                             cv2.imwrite("resultado_imgs/" + nombre, imgResultado)
+
                             cv2.rectangle(imgOriginal, (x, y), (x + w, y + h), (255, 0, 0), 1)  # dibuja cada cuadro
 
-            xAnt = x
-            yAnt = y
-        plt.title(img)
-        plt.imshow(imgOriginal)
-        plt.show()
+                xAnt = x
+                yAnt = y
+        print(img, " analizado")
+        # plt.title(img)
+        # plt.imshow(imgOriginal)
+        # plt.show()
 
 
-def comparacion(mascara):
+def comparacion(imagen):
+    mascaraRojo = HSV(imagen, 1)
+    mascaraAzul = HSV(imagen, 2)
+
+    porcRojo, tipoRojo = calculaPorcentaje(mascaraRojo)
+    porcAzul, tipoAzul = calculaPorcentaje(mascaraAzul)
+
+    if (porcRojo < porcAzul):
+        return porcAzul, tipoAzul
+    else:
+        return porcRojo, tipoRojo
+
+
+def calculaPorcentaje(mascara):
     ## https://programmerclick.com/article/81161880156/ ##
-    porcentajes = [0, 0, 0]
+    porcentajes = [0, 0, 0, 0, 0, 0]
     prohibicion = cv2.imread("mascaras/prohibicion.jpg", 0)
     score, _ = structural_similarity(mascara, prohibicion, full=True)
     porcentajes[0] = score
@@ -159,12 +174,24 @@ def comparacion(mascara):
     porcentajes[1] = score
 
     stop = cv2.imread("mascaras/stop.jpg", 0)
-    score, diff = structural_similarity(mascara, stop, full=True)
+    score, _ = structural_similarity(mascara, stop, full=True)
     porcentajes[2] = score
 
-    max = np.amax(porcentajes)
-    pos = np.where(porcentajes == max)
-    return max, pos[0][0]
+    dirProhibida = cv2.imread("mascaras/dirProhibida.jpg", 0)
+    score, _ = structural_similarity(mascara, dirProhibida, full=True)
+    porcentajes[3] = score
+
+    cedaPaso = cv2.imread("mascaras/cedaPaso.jpg", 0)
+    score, _ = structural_similarity(mascara, cedaPaso, full=True)
+    porcentajes[4] = score
+
+    dirObligatoria = cv2.imread("mascaras/dirObligatoria.jpg", 0)
+    score, _ = structural_similarity(mascara, dirObligatoria, full=True)
+    porcentajes[5] = score
+
+    maximo = np.amax(porcentajes)
+    posicion = np.where(porcentajes == maximo)
+    return maximo, posicion[0][0]
 
 
 if __name__ == "__main__":
