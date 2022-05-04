@@ -102,6 +102,8 @@ def detector(path):
 
     imagenes = os.listdir(path)
     direccion = path + "/"
+    total = 0
+    corte = 0
     for img in imagenes:
         imgOriginal = cv2.imread(direccion + img, 1)
 
@@ -112,42 +114,84 @@ def detector(path):
         mser = cv2.MSER_create(delta=3, min_area=250, max_area=20000, max_variation=0.1, min_diversity=25)
         regiones, boundingBoxes = mser.detectRegions(imgSalida)
 
-        xAnt, yAnt, _, _ = boundingBoxes[0]
         numDeteccion = 0
-        for box in boundingBoxes:
+
+        boxCuadrado = [(x, y, w, h) for (x, y, w, h) in boundingBoxes if (
+                    w / h <= 1.2 and w / h >= 0.8)]  # Eliminar regiones con proporcion distinta de 1.0 -> se queda con cuadrados practicamente
+
+        listaX = []
+
+        for box in boxCuadrado:
             x, y, w, h = box
-            proporcion = w / h
+            total += 1
 
-            separacion_x = xAnt / x
-            separacion_y = yAnt / y
+            if not contenido(listaX, box):
+                listaX.append(box)
+                cv2.rectangle(imgOriginal, (x, y), (x + w, y + h), (255, 0, 0), 2)  # dibuja cada cuadro
+                cv2.putText(imgOriginal, str(numDeteccion), (x + 10, y + 10), 0, 0.3, (0, 255, 0), 1)
+                if (x >= 10 and y >= 10 and x + w + 20 <= imgOriginal.shape[0] and y + h + 20 <= imgOriginal.shape[
+                    1]):  # Mirar desbordamiento imagen para ampliar
+                    x -= 10
+                    y -= 10
+                    w += 20
+                    h += 20
+                    numDeteccion += 1
+                    imgResultado = imgOriginal[y:y + h, x:x + w]
 
-            if not (separacion_x > 0.8 and separacion_x < 1.2 and separacion_y > 0.8 and separacion_y < 1.2):
-                if (
-                        proporcion <= 1.2 and proporcion >= 0.8):  # Eliminar regiones con proporcion distinta de 1.0 -> se queda con cuadrados practicamente
-                    if (x >= 10 and y >= 10 and x + w + 20 <= imgOriginal.shape[0] and y + h + 20 <= imgOriginal.shape[
-                        1]):  # Mirar desbordamiento imagen para ampliar
-                        x -= 10
-                        y -= 10
-                        w += 20
-                        h += 20
-                        numDeteccion += 1
-                        imgResultado = imgOriginal[y:y + h, x:x + w]
+                    porcentaje, tipo = comparacion(imgResultado)
 
-                        porcentaje, tipo = comparacion(imgResultado)
+                    if (
+                            porcentaje > 0.15):  # p > 0.181 -> 165; p > 0 -> 888; p > 0.2 -> 61 ; p > 0.1 -> 779; p > 0.15 -> 593
+                        corte += 1
+                        nombre = img[0:5] + "_" + str(numDeteccion) + img[5:]
+                        # cv2.imwrite("resultado_imgs/" + nombre, imgResultado)
 
-                        if (porcentaje >= 0.2):
-                            nombre = img[0:5] + "_" + str(numDeteccion) + img[5:]
-                            cv2.imwrite("resultado_imgs/" + nombre, imgResultado)
+                        print(tipo, "->", porcentaje)
 
-                            cv2.rectangle(imgOriginal, (x, y), (x + w, y + h), (255, 0, 0), 1)  # dibuja cada cuadro
+        cv2.imwrite("resultado_imgs/" + img, imgOriginal)
 
-                xAnt = x
-                yAnt = y
-        print(img, " analizado")
-        # plt.title(img)
-        # plt.imshow(imgOriginal)
+        # plt.imshow (imgOriginal)
         # plt.show()
+        print(img, " analizado")
 
+    print("Total", total, "// Corte", corte)
+
+
+def contenido(boxes, actual):
+    for b1 in boxes:
+        if (b1 != actual):
+            if bb_intersection_over_union(b1, actual) > 0.4:
+                return True
+
+    return False
+
+
+## https://programmerclick.com/article/2819545676/##
+def bb_intersection_over_union(boxA, boxB):
+    # determine the (x, y)-coordinates of the intersection rectangle
+    xA = max(boxA[0], boxB[0])
+    yA = max(boxA[1], boxB[1])
+    xB = min(boxA[2], boxB[2])
+    yB = min(boxA[3], boxB[3])
+
+    # compute the area of intersection rectangle
+    interArea = (xB - xA + 1) * (yB - yA + 1)
+
+    # compute the area of both the prediction and ground-truth
+    # rectangles
+    boxAArea = (boxA[2] - boxA[0] + 1) * (boxA[3] - boxA[1] + 1)
+    boxBArea = (boxB[2] - boxB[0] + 1) * (boxB[3] - boxB[1] + 1)
+
+    # compute the intersection over union by taking the intersection
+    # area and dividing it by the sum of prediction + ground-truth
+    # areas - the interesection area
+    iou = interArea / float(boxAArea + boxBArea - interArea)
+
+    # return the intersection over union value
+    return iou
+
+
+## - ##
 
 def comparacion(imagen):
     mascaraRojo = HSV(imagen, 1)
@@ -166,28 +210,22 @@ def calculaPorcentaje(mascara):
     ## https://programmerclick.com/article/81161880156/ ##
     porcentajes = [0, 0, 0, 0, 0, 0]
     prohibicion = cv2.imread("mascaras/prohibicion.jpg", 0)
-    score, _ = structural_similarity(mascara, prohibicion, full=True)
-    porcentajes[0] = score
+    porcentajes[0], _ = structural_similarity(mascara, prohibicion, full=True)
 
     peligro = cv2.imread("mascaras/peligro.jpg", 0)
-    score, _ = structural_similarity(mascara, peligro, full=True)
-    porcentajes[1] = score
+    porcentajes[1], _ = structural_similarity(mascara, peligro, full=True)
 
     stop = cv2.imread("mascaras/stop.jpg", 0)
-    score, _ = structural_similarity(mascara, stop, full=True)
-    porcentajes[2] = score
+    porcentajes[2], _ = structural_similarity(mascara, stop, full=True)
 
     dirProhibida = cv2.imread("mascaras/dirProhibida.jpg", 0)
-    score, _ = structural_similarity(mascara, dirProhibida, full=True)
-    porcentajes[3] = score
+    porcentajes[3], _ = structural_similarity(mascara, dirProhibida, full=True)
 
     cedaPaso = cv2.imread("mascaras/cedaPaso.jpg", 0)
-    score, _ = structural_similarity(mascara, cedaPaso, full=True)
-    porcentajes[4] = score
+    porcentajes[4], _ = structural_similarity(mascara, cedaPaso, full=True)
 
     dirObligatoria = cv2.imread("mascaras/dirObligatoria.jpg", 0)
-    score, _ = structural_similarity(mascara, dirObligatoria, full=True)
-    porcentajes[5] = score
+    porcentajes[5], _ = structural_similarity(mascara, dirObligatoria, full=True)
 
     maximo = np.amax(porcentajes)
     posicion = np.where(porcentajes == maximo)
