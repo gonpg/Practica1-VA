@@ -1,24 +1,45 @@
-import argparse
 import os
 import cv2
-import matplotlib.pyplot as plt
-import numpy as np
+import sys
 import shutil
-from skimage.metrics import structural_similarity
+import argparse
+import numpy as np
+import matplotlib.pyplot as plt
 
 
 def main():
-    cargarMascaras(args.train_path)
-    detector(args.test_path)  # hacer comparacion, calculo regiones, etc
-
-
-def cargarMascaras(path):
     try:
         os.makedirs('mascaras')
     except FileExistsError:
         print("Ya existe el directorio")
+        shutil.rmtree('mascaras')
+        os.makedirs('mascaras')
         # pass
 
+    cargarMascaras(args.train_path)
+
+    try:
+        os.makedirs('resultado_imgs')
+    except FileExistsError:
+        print("Ya existe el directorio")
+        shutil.rmtree('resultado_imgs')
+        os.makedirs('resultado_imgs')
+        # pass
+
+    try:
+        open("resultado.txt", "xt")
+    except:
+        os.remove("resultado.txt")
+
+    try:
+        open("resultado_por_tipo.txt", "xt")
+    except:
+        os.remove("resultado_por_tipo.txt")
+
+    detector(args.test_path)
+
+
+def cargarMascaras(path):
     prohibicion = ["00", "01", "02", "03", "04", "05", "07", "08", "09", "10", "15", "16"]
     resultado = HSV(media(path, prohibicion), 1)
     cv2.imwrite("mascaras/prohibicion.jpg", resultado)
@@ -49,7 +70,13 @@ def media(path, nombres):
     k = 0
     for i in nombres:
         direccion = path + "/" + i
-        imagenes = os.listdir(direccion)
+
+        try:
+            imagenes = os.listdir(direccion)
+        except:
+            print("Error: Reference Source Not Found")
+            sys.exit(-1)
+
         for j in imagenes:
             ## https://stackoverflow.com/questions/57723968/blending-multiple-images-with-opencv ##
             img = cv2.imread(direccion + "/" + j, 1)  # imagen en BGR
@@ -93,18 +120,17 @@ def HSV(img, mode):
 
 def detector(path):
     try:
-        os.makedirs('resultado_imgs')
-    except FileExistsError:
-        print("Ya existe el directorio")
-        shutil.rmtree('resultado_imgs')
-        os.makedirs('resultado_imgs')
-        # pass
+        imagenes = os.listdir(path)
+    except:
+        print("Error: Reference Source Not Found")
+        sys.exit(-1)
 
-    imagenes = os.listdir(path)
     direccion = path + "/"
-    total = 0
-    corte = 0
     for img in imagenes:
+        if (img.split(".")[1] == "txt"):
+            print("Fichero", img)
+            continue
+
         imgOriginal = cv2.imread(direccion + img, 1)
 
         imgGray = cv2.cvtColor(imgOriginal, cv2.COLOR_BGR2GRAY)
@@ -114,56 +140,68 @@ def detector(path):
         mser = cv2.MSER_create(delta=3, min_area=250, max_area=20000, max_variation=0.1, min_diversity=25)
         regiones, boundingBoxes = mser.detectRegions(imgSalida)
 
-        numDeteccion = 0
-
         boxCuadrado = [(x, y, w, h) for (x, y, w, h) in boundingBoxes if (
                     w / h <= 1.2 and w / h >= 0.8)]  # Eliminar regiones con proporcion distinta de 1.0 -> se queda con cuadrados practicamente
 
-        listaX = []
-
+        listaSolapamientos = []
         for box in boxCuadrado:
             x, y, w, h = box
-            total += 1
 
-            if not contenido(listaX, box):
-                listaX.append(box)
-                cv2.rectangle(imgOriginal, (x, y), (x + w, y + h), (255, 0, 0), 2)  # dibuja cada cuadro
-                cv2.putText(imgOriginal, str(numDeteccion), (x + 10, y + 10), 0, 0.3, (0, 255, 0), 1)
-                if (x >= 10 and y >= 10 and x + w + 20 <= imgOriginal.shape[0] and y + h + 20 <= imgOriginal.shape[
-                    1]):  # Mirar desbordamiento imagen para ampliar
-                    x -= 10
-                    y -= 10
-                    w += 20
-                    h += 20
-                    numDeteccion += 1
-                    imgResultado = imgOriginal[y:y + h, x:x + w]
+            contenido, boxSolapado = boxContenida(listaSolapamientos, box)
+            if not contenido:
+                listaSolapamientos.append(box)
+            else:
+                imgActual = imgOriginal[y:y + h, x:x + w]
+                porcentajeBoxActual, _ = comparacion(imgActual)
 
-                    porcentaje, tipo = comparacion(imgResultado)
+                xSolapado, ySolapado, wSolapado, hSolapado = boxSolapado
+                imgSolapado = imgOriginal[ySolapado: ySolapado + hSolapado, xSolapado: xSolapado + wSolapado]
+                porcentajeBoxContenido, _ = comparacion(imgSolapado)
 
-                    if (
-                            porcentaje > 0.15):  # p > 0.181 -> 165; p > 0 -> 888; p > 0.2 -> 61 ; p > 0.1 -> 779; p > 0.15 -> 593
-                        corte += 1
-                        nombre = img[0:5] + "_" + str(numDeteccion) + img[5:]
-                        # cv2.imwrite("resultado_imgs/" + nombre, imgResultado)
+                if (
+                        porcentajeBoxActual > porcentajeBoxContenido):  # Actualiza si porcentaje de similitud de caja actual mayor
+                    listaSolapamientos[listaSolapamientos.index(boxSolapado)] = box
 
-                        print(tipo, "->", porcentaje)
+        for x, y, w, h in listaSolapamientos:
+            imgResultado = imgOriginal[y:h + y, x:w + x]
+            porcentaje, tipo = comparacion(imgResultado)
+
+            if (porcentaje > 0.2):
+                f = open("resultado.txt", "a")
+                nombre = img.split(".")[0] + ".ppm" + ";" + str(x) + ";" + str(y) + ";" + str(w + x) + ";" + str(
+                    h + y) + ";" + str(1) + ";" + str(round(porcentaje, 3)) + "\n"
+                f.write(nombre)
+                f.close()
+
+                f = open("resultado_por_tipo.txt", "a")
+                nombre = img.split(".")[0] + ".ppm" + ";" + str(x) + ";" + str(y) + ";" + str(w + x) + ";" + str(
+                    h + y) + ";" + str(tipo + 1) + ";" + str(round(porcentaje, 3)) + "\n"
+                f.write(nombre)
+                f.close()
+
+                cv2.rectangle(imgOriginal, (x, y), (x + w, y + h), (0, 0, 255), 2)  # dibuja cada cuadro
+
+                posXY = "(" + str(x) + "," + str(y) + ")"
+                cv2.putText(imgOriginal, posXY, (x - 10, y - 10), 0, 0.3, (0, 0, 255), 1)
+
+                posWH = "(" + str(w + x) + "," + str(h + y) + ")"
+                cv2.putText(imgOriginal, posWH, (w + x + 10, h + y + 10), 0, 0.3, (0, 0, 255), 1)
 
         cv2.imwrite("resultado_imgs/" + img, imgOriginal)
-
-        # plt.imshow (imgOriginal)
-        # plt.show()
         print(img, " analizado")
 
-    print("Total", total, "// Corte", corte)
 
+def boxContenida(boxes, actual):
+    newActual = [actual[0], actual[1], actual[2] + actual[0],
+                 actual[3] + actual[1]]  # Da formato para comprobación overlapping boxes
 
-def contenido(boxes, actual):
     for b1 in boxes:
-        if (b1 != actual):
-            if bb_intersection_over_union(b1, actual) > 0.4:
-                return True
+        newB1 = [b1[0], b1[1], b1[2] + b1[0], b1[3] + b1[1]]  # Da formato para comprobación overlapping boxes
 
-    return False
+        if newB1 == newActual or bb_intersection_over_union(newB1, newActual) > 0.4:
+            return True, b1
+
+    return False, None
 
 
 ## https://programmerclick.com/article/2819545676/##
@@ -175,7 +213,7 @@ def bb_intersection_over_union(boxA, boxB):
     yB = min(boxA[3], boxB[3])
 
     # compute the area of intersection rectangle
-    interArea = (xB - xA + 1) * (yB - yA + 1)
+    interArea = max(0, xB - xA + 1) * max(0, yB - yA + 1)
 
     # compute the area of both the prediction and ground-truth
     # rectangles
@@ -193,6 +231,7 @@ def bb_intersection_over_union(boxA, boxB):
 
 ## - ##
 
+
 def comparacion(imagen):
     mascaraRojo = HSV(imagen, 1)
     mascaraAzul = HSV(imagen, 2)
@@ -207,29 +246,35 @@ def comparacion(imagen):
 
 
 def calculaPorcentaje(mascara):
-    ## https://programmerclick.com/article/81161880156/ ##
     porcentajes = [0, 0, 0, 0, 0, 0]
     prohibicion = cv2.imread("mascaras/prohibicion.jpg", 0)
-    porcentajes[0], _ = structural_similarity(mascara, prohibicion, full=True)
+    porcentajes[0] = similitudPorcentaje(prohibicion, mascara)
 
     peligro = cv2.imread("mascaras/peligro.jpg", 0)
-    porcentajes[1], _ = structural_similarity(mascara, peligro, full=True)
+    porcentajes[1] = similitudPorcentaje(peligro, mascara)
 
     stop = cv2.imread("mascaras/stop.jpg", 0)
-    porcentajes[2], _ = structural_similarity(mascara, stop, full=True)
+    porcentajes[2] = similitudPorcentaje(stop, mascara)
 
     dirProhibida = cv2.imread("mascaras/dirProhibida.jpg", 0)
-    porcentajes[3], _ = structural_similarity(mascara, dirProhibida, full=True)
+    porcentajes[3] = similitudPorcentaje(dirProhibida, mascara)
 
     cedaPaso = cv2.imread("mascaras/cedaPaso.jpg", 0)
-    porcentajes[4], _ = structural_similarity(mascara, cedaPaso, full=True)
+    porcentajes[4] = similitudPorcentaje(cedaPaso, mascara)
 
     dirObligatoria = cv2.imread("mascaras/dirObligatoria.jpg", 0)
-    porcentajes[5], _ = structural_similarity(mascara, dirObligatoria, full=True)
+    porcentajes[5] = similitudPorcentaje(dirObligatoria, mascara)
 
     maximo = np.amax(porcentajes)
     posicion = np.where(porcentajes == maximo)
     return maximo, posicion[0][0]
+
+
+def similitudPorcentaje(mascara, img):
+    resAnd = cv2.bitwise_and(mascara, img)
+    unosMascara = cv2.countNonZero(mascara)
+    unosImg = cv2.countNonZero(resAnd)
+    return unosImg / unosMascara
 
 
 if __name__ == "__main__":
